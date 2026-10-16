@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""dmarc_read.py - summarize DMARC aggregate reports (.xml, .zip or .gz).
+"""dmarc_read_v1.py - summarize DMARC aggregate reports (.xml, .zip or .gz).
 Standard library only.
-Usage: python3 dmarc_read.py [--rdns] FILE [FILE ...]
+Usage: python3 dmarc_read_v1.py [--rdns] FILE [FILE ...]
 """
 import gzip
 import socket

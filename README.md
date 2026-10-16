@@ -12,15 +12,15 @@ Mail providers send DMARC aggregate reports every day. They are XML, built for m
 
 ## Usage
 ```
-python3 dmarc_read.py [--rdns] FILE [FILE ...]
-python3 dmarc_read.py --dns DOMAIN[:SELECTOR]
+python3 dmarc_read_v2.py [--rdns] FILE [FILE ...]
+python3 dmarc_read_v2.py --dns DOMAIN[:SELECTOR]
 ```
-`dmarc_read_v1.py` is the original version 1 (report reader only), kept for reference.
+`dmarc_read_v1.py` is the original version 1 (report reader only), kept for reference. `dmarc_read_v2.py` is the current version.
 
 ## Sample output
 Made-up report, placeholder values only (`sample_report.xml`):
 ```
-$ python3 dmarc_read.py sample_report.xml
+$ python3 dmarc_read_v2.py sample_report.xml
 ============================================================
 File:     sample_report.xml
 Reporter: receiver.example.net  ID [redacted]
