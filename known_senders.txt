@@ -1,0 +1,3 @@
+# Domains whose verified mail servers may send mail as your domain.
+# One per line. Add one only after checking it. Lines starting with # are ignored.
+google.com
