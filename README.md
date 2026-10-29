@@ -1,6 +1,6 @@
 # dmarc-report-reader
 
-A small command-line tool, written in Python, that turns DMARC aggregate reports into a plain-language summary, says whether a domain looks ready for a stricter policy, and checks the domain's SPF, DKIM and DMARC records. Written and tested on macOS. Version 3 needs one third-party package, `defusedxml` (see Setup).
+A small command-line tool, written in Python, that turns DMARC aggregate reports into a plain-language summary, says whether a domain looks ready for a stricter policy, and checks the domain's SPF, DKIM and DMARC records. Written and tested on macOS. Versions 3, 3.1 and 4 need one third-party package, `defusedxml` (see Setup).
 
 ## Why
 Mail providers send DMARC aggregate reports every day. They are XML, built for machines, and easy to ignore. This tool makes them readable so the early warning they carry is not wasted.
@@ -18,6 +18,21 @@ Mail providers send DMARC aggregate reports every day. They are XML, built for m
 - Reports are parsed with `defusedxml`, a hardened XML parser, because report files come from outside.
 - Reverse-DNS lookups run in parallel with an overall 8-second limit.
 
+**Version 3.1: next-step verdict.**
+
+- Skips duplicate reports (same reporter and report ID), so a file saved twice counts once, and says which file it skipped.
+- Shows which days have a report and lists the days without one. A gap is usually a day with no mail, but the list makes a missing file easy to spot.
+- Reads the policy each report shows, breaks the totals down by policy, and recommends the next step after the one now in effect: quarantine at `pct=25`, then full quarantine (remove `pct`), then `reject`. It waits until the reports cover 14 days at the current policy, with every message passing.
+- First automated checks, in `tests/run_tests.py`.
+
+**Version 4: files reports and remembers senders.**
+
+- `--file FOLDER --to RECORDS` files new reports into `RECORDS/Reports` with dated names and moves copies of reports already filed into `RECORDS/_Archive`. It shows a dry run first and only moves files when you add `--yes`. It never deletes or overwrites.
+- `--prefix TEXT` sets the start of each filed name.
+- `--history FILE` records every report and sending server. Each run says what is new since the last run and flags any server it has never seen. The history file holds real IP addresses, so keep it with your records, not in the repo.
+- A damaged or unreadable report file is reported and skipped instead of stopping the run.
+- 25 automated checks in `tests/run_tests.py`.
+
 ## Setup
 ```
 python3 -m venv .venv
@@ -28,14 +43,20 @@ Keep your known senders in `known_senders.txt` beside the script (one domain per
 
 ## Usage
 ```
-python3 dmarc_read_v3.py --summary FILE [FILE ...]
-python3 dmarc_read_v3.py [--rdns] FILE [FILE ...]
-python3 dmarc_read_v3.py --dns DOMAIN[:SELECTOR] [--authoritative]
+python3 dmarc_read_v4.py --summary FILE [FILE ...]
+python3 dmarc_read_v4.py [--rdns] FILE [FILE ...]
+python3 dmarc_read_v4.py --dns DOMAIN[:SELECTOR] [--authoritative]
 ```
-`dmarc_read_v1.py` is the original version 1 and `dmarc_read_v2.py` is version 2 (standard library only), both kept for reference. `dmarc_read_v3.py` is the current version.
+`dmarc_read_v1.py` is the original version 1 and `dmarc_read_v2.py` is version 2 (standard library only), both kept for reference. `dmarc_read_v3.py` is version 3 and `dmarc_read_v3_1.py` is version 3.1. `dmarc_read_v4.py` is the current version.
+
+## Tests
+
+    python3 tests/run_tests.py
+
+25 checks on made-up data with placeholder domains and documentation IP ranges. No network needed, but `defusedxml` must be installed.
 
 ## Sample output
-Made-up report, placeholder values only (`sample_report.xml`):
+Made-up report, placeholder values only (`sample_report.xml`). Output shown is from version 3:
 ```
 $ python3 dmarc_read_v3.py sample_report.xml
 ============================================================
@@ -68,7 +89,7 @@ The second source shows the common case that looks alarming but is not: SPF fail
 ## How it was tested
 - Run on three real daily reports (identifying details not published); output checked field by field against the raw XML, and timestamps checked with macOS `date`.
 - Version 3 adds six tested parts (parsing, reverse DNS, known senders, summary and verdict, DNS check, command-line handling).
-- On my real domain's reports so far: 6 days, 4 messages, 100% passed, verdict NOT READY YET because it needs 14 days.
+- On my real domain's first 25 days of reports (2026-10-02 to 2026-10-26): 44 messages, 100% passed DMARC, every sender known and forward-confirmed. The domain has been at `p=quarantine` with `pct=25` since 2026-10-21.
 - Two real bugs were caught during the version 2 build: a top-level line pasted with an indent (Python accepted it; it would only have failed when `--dns` ran, so a clean syntax check is not proof of correct logic), and two lines joined by a paste followed by an auto-indent slip that Python reported as an IndentationError naming the exact line.
 
 ## Limits
