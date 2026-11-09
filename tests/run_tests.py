@@ -1,11 +1,11 @@
-"""Checks for dmarc_read_v4 (v3.1 checks plus v4 filing and history) with made-up reports (placeholders only).
-Run: python3 tests/run_tests.py  (from the folder holding dmarc_read_v3_1.py)
+"""Checks for dmarc_read_v4_1 (v3.1, v4.0 and v4.1 checks) with made-up reports (placeholders only).
+Run: python3 tests/run_tests.py  (from the folder holding dmarc_read_v4_1.py)
 Reverse DNS is replaced by a fake table so the tests work offline."""
 import contextlib, io, sys, tempfile, zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import dmarc_read_v4 as d
+import dmarc_read_v4_1 as d
 
 DAY = 86400
 BASE = 1790899200  # 2026-10-02 00:00 UTC
@@ -105,7 +105,7 @@ with tempfile.TemporaryDirectory() as tmp:
 with tempfile.TemporaryDirectory() as tmp:
     # 7. failures and unknown senders still win over everything
     rows = (("192.0.2.10", 2, "pass", "pass"), ("198.51.100.9", 1, "fail", "fail"))
-    out, issues = run(files(tmp, [report(0, "a", rows=rows), report(20, "b")]))
+    out, issues = run(files(tmp, [report(0, "a"), report(20, "b", rows=rows)]))
     ok &= check("failure and unknown -> NOT READY", "Verdict: NOT READY." in out and issues == 2, out)
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -207,12 +207,94 @@ with tempfile.TemporaryDirectory() as tmp:
     import subprocess
     bad = Path(tmp) / "bad.zip"; bad.write_bytes(b"PK not really a zip")
     good = files(tmp, [report(0, "g")])[0]
-    script = Path(__file__).resolve().parent.parent / "dmarc_read_v4.py"
+    script = Path(__file__).resolve().parent.parent / "dmarc_read_v4_1.py"
     run_ = subprocess.run([sys.executable, str(script), str(bad), good],
                           capture_output=True, text=True)
     ok &= check("damaged zip reported, not a crash", "Could not read" in run_.stdout
                 and run_.returncode == 1 and "Traceback" not in run_.stderr,
                 run_.stdout + run_.stderr)
+
+# ---------------------------------------------------------------- v4.1 checks
+with tempfile.TemporaryDirectory() as tmp:
+    # 17. an old failure followed by clean reports: shown as history, streak counted after it
+    bad = (("192.0.2.10", 1, "fail", "fail"),)
+    out, issues = run(files(tmp, [report(0, "a", rows=bad), report(5, "b"), report(20, "c")]))
+    ok &= check("old failure shown as history", "Earlier failures: 1 message(s), last on 2026-10-02" in out, out)
+    ok &= check("clean streak counted after the failure",
+                "READY to move to p=quarantine" in out and issues == 0, out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 18. a young streak after a failure waits for 14 clean days
+    bad = (("192.0.2.10", 1, "fail", "fail"),)
+    out, issues = run(files(tmp, [report(0, "a"), report(10, "b", rows=bad), report(15, "c")]))
+    ok &= check("young clean streak -> wait", "NOT READY YET" in out and "5 day(s) of clean reports" in out, out)
+
+# 19-20. failure reasons in plain words
+rec = {"header_from": "example.com", "results": [
+    ("dkim", "example-com.20260101.provider.example", "pass", "x"),
+    ("spf", "relay.example.org", "softfail", None)]}
+why = d.why_failed(rec)
+ok &= check("reason: provider-only DKIM", "not your domain" in why, why)
+ok &= check("reason: SPF on a relay", "forwarder or relay" in why, why)
+
+
+def raw_name(org, day, ext):
+    begin = BASE + day * DAY
+    return f"{org}!example.com!{begin}!{begin + DAY - 1}{ext}"
+
+
+def plain_setup(tmp):
+    src, dest = Path(tmp) / "Downloads", Path(tmp) / "Records"
+    (dest / "Reports").mkdir(parents=True); src.mkdir()
+    return src, dest
+
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 21. the same report as .zip and .xml: the .zip is filed, the .xml archived
+    src, dest = plain_setup(tmp)
+    xml = report(4, "Z")
+    (src / raw_name("mail.example.net", 4, ".xml")).write_text(xml)
+    with zipfile.ZipFile(src / raw_name("mail.example.net", 4, ".zip"), "w") as z:
+        z.writestr("r.xml", xml)
+    out, problems, _ = file_run(src, dest, True)
+    names = [p.name for p in (dest / "Reports").iterdir()]
+    ok &= check("zip filed, xml archived", names and names[0].endswith(".zip")
+                and [p.suffix for p in (dest / "_Archive").iterdir()] == [".xml"], out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 22-23. reporter from the file name; two same-day reports never collide
+    src, dest = plain_setup(tmp)
+    for org, rid in (("aol.example", "A1"), ("yahoo.example", "Y1")):
+        xml = report(6, rid).replace("mail.example.net", "Yahoo")
+        (src / raw_name(org, 6, ".xml")).write_text(xml)
+    (src / raw_name("yahoo.example", 6, " (1).xml")).write_text(report(6, "Y2"))
+    out, problems, _ = file_run(src, dest, True)
+    names = " | ".join(sorted(p.name for p in (dest / "Reports").iterdir()))
+    ok &= check("reporter named from the file", "— Aol —" in names and "— Yahoo —" in names, out)
+    ok &= check("same-day reports get distinct names", problems == 0
+                and len(list((dest / "Reports").iterdir())) == 3, out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 24. an unreadable report file in Downloads counts as a problem (exit 1)
+    src, dest = plain_setup(tmp)
+    (src / raw_name("mail.example.net", 2, ".zip")).write_bytes(b"PK not really a zip")
+    out, problems, _ = file_run(src, dest, True)
+    ok &= check("unreadable file -> problem", problems == 1 and "Could not read" in out, out)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 25. DMARC_RECORDS supplies --to and --history; filing prints NEW SENDER
+    import os
+    src, dest = plain_setup(tmp)
+    with zipfile.ZipFile(src / raw_name("mail.example.net", 3, ".zip"), "w") as z:
+        z.writestr("r.xml", report(3, "E"))
+    script = Path(__file__).resolve().parent.parent / "dmarc_read_v4_1.py"
+    env = dict(os.environ, DMARC_RECORDS=str(dest))
+    run_ = subprocess.run([sys.executable, str(script), "--file", str(src), "--yes"],
+                          capture_output=True, text=True, env=env)
+    ok &= check("DMARC_RECORDS used for --to", run_.returncode == 0
+                and len(list((dest / "Reports").iterdir())) == 1, run_.stdout + run_.stderr)
+    ok &= check("filing prints NEW SENDER", "NEW SENDER  192.0.2.10" in run_.stdout
+                and (dest / "dmarc_history.json").exists(), run_.stdout + run_.stderr)
 
 print("ALL PASSED" if ok else "SOME TESTS FAILED")
 sys.exit(0 if ok else 1)
